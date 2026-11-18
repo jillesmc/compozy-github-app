@@ -88,6 +88,13 @@ function answer(fake: FakeGitHub, req: FakeRequest, query: URLSearchParams): Fak
     };
     return { status: 200, body: { data: { repository: { pullRequest } } } };
   }
+  const contents = `/repos/${s.repo}/contents/`;
+  if (req.path.startsWith(contents) && req.method === "GET") {
+    // Only the base branch holds the conventions: any other ref (e.g. the PR head) answers 404.
+    const text = query.get("ref") === s.pr.base.ref ? s.contents[req.path.slice(contents.length)] : undefined;
+    if (text === undefined) return { status: 404, body: { message: "Not Found" } };
+    return { status: 200, body: { type: "file", encoding: "base64", size: text.length, content: Buffer.from(text).toString("base64") } };
+  }
   const pulls = `/repos/${s.repo}/pulls`;
   if (req.path.startsWith(`/repos/${s.repo}/compare/`)) return { status: 200, body: { ...s.compare, commits: page(s.compare.commits, query) } };
   if (req.path === pulls && req.method === "GET") {

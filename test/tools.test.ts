@@ -24,7 +24,8 @@ describe("pr_context and merge_gate over the fake GitHub", () => {
       threadNode("PRRT_2", false, [{ login: "octocat", body: "human thread", at: "2026-11-18T13:00:00Z" }]),
     ];
     const out = await h.call("pr_context", { repo: REPO, number: 231 });
-    assert.deepEqual(Object.keys(out), ["head_sha", "base_ref", "head_ref", "author", "state", "is_draft", "title", "body", "files", "files_truncated", "commentable", "app_reviews", "app_threads"]);
+    assert.deepEqual(Object.keys(out), ["head_sha", "base_ref", "head_ref", "author", "state", "is_draft", "title", "body", "files", "files_truncated", "commentable", "app_reviews", "app_threads", "conventions"]);
+    assert.deepEqual(out.conventions, { ref: "staging", review_md: null, factory_toml: null });
     assert.equal(out.head_sha, HEAD);
     assert.equal(out.state, "open");
     assert.equal(out.files_truncated, false);
@@ -35,6 +36,13 @@ describe("pr_context and merge_gate over the fake GitHub", () => {
     assert.equal(out.app_threads[0].commit_id, HEAD);
     assert.deepEqual(out.app_threads[0].comments.map((c: any) => [c.author, c.is_app]), [[BOT, true], ["octocat", false]]);
     assert.equal(h.gh.requests.filter(r => r.path === "/graphql").length, 2);
+  });
+
+  test("pr_context: conventions come from the base branch, never the PR head", async () => {
+    h.gh.state.contents = { "REVIEW.md": "# Rules\n", ".compozy/factory/factory.toml": "[review]\nrepo = \"x/y\"\n" };
+    const out = await h.call("pr_context", { repo: REPO, number: 231 });
+    assert.deepEqual(out.conventions, { ref: "staging", review_md: "# Rules\n", factory_toml: "[review]\nrepo = \"x/y\"\n" });
+    assert.equal(h.gh.requests.filter(r => r.path.includes("/contents/")).length, 2);
   });
 
   test("UT-012 pr_context: more changed files than listed → files_truncated", async () => {

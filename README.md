@@ -25,8 +25,8 @@ review rules in code:
 2. Install the extension:
 
    ```console
-   $ compozy extension install github:<owner>/compozy-github-app@v0.1.0 --allow-unverified --yes
-   installed github-app-review 0.1.0 (global, all profiles)
+   $ compozy extension install github:<owner>/compozy-github-app@v0.2.0 --allow-unverified --yes
+   installed github-app-review 0.2.0 (global, all profiles)
    ```
 
 3. Set the variables (or `compozy extension secrets bind ... --vault-ref <ref>` for an existing
@@ -106,7 +106,7 @@ CompozyOS derives the tool IDs from the extension name with underscores:
 
 | Tool | Input | Returns |
 | --- | --- | --- |
-| `pr_context` (read) | `repo`, `number` | `head_sha`, refs, `author`, `state`, `is_draft`, `title`, `body`, `files`, `files_truncated`, `commentable` lines per path and side, `app_reviews` (with `pass`), `app_threads` (with the `commit_id` each was opened on) |
+| `pr_context` (read) | `repo`, `number` | `head_sha`, refs, `author`, `state`, `is_draft`, `title`, `body`, `files`, `files_truncated`, `commentable` lines per path and side, `app_reviews` (with `pass`), `app_threads` (with the `commit_id` each was opened on), `conventions` (`ref`, `review_md`, `factory_toml`: the `REVIEW.md` and `.compozy/factory/factory.toml` of the base branch, `null` when absent, so a PR never supplies the rules it is judged by) |
 | `submit_review` (write) | `repo`, `number`, `head_sha`, `summary` (≤ 8 000), `findings` (≤ 50: `path`, `line`, `side?`, `start_line?`, `severity` `blocker\|major\|minor\|nit`, `title`, `body` ≤ 4 000), `rereview?` | `review_id`, `event`, `pass`, `inline`, `moved_to_summary`, `url` |
 | `merge_gate` (read) | `repo`, `number`, `kind` (`delivery` \| `promotion`) | `ready`, `head_sha`, `reasons` |
 | `upsert_promotion` (write) | `repo` (the `GITHUB_APP_PROMOTION` repository) | `created`, `number`, `url`, `head_sha`, `included_prs` |

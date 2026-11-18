@@ -37,6 +37,8 @@ export interface FakeState {
   compare: { total_commits: number; commits: { sha: string; commit: { message: string } }[] };
   /** Open/closed PRs listed by `GET /pulls`; `POST /pulls` adds one and makes it `pr`. */
   pulls: any[];
+  /** Files by path on the base branch, served by `GET contents/{path}`; absent → 404. */
+  contents: Record<string, string>;
 }
 
 export function defaultState(): FakeState {
@@ -80,6 +82,7 @@ export function defaultState(): FakeState {
       ],
     },
     pulls: [],
+    contents: {},
   };
 }
 
