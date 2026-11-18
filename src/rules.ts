@@ -155,7 +155,8 @@ function latestByAuthor(reviews: SnapshotReview[]): SnapshotReview[] {
   return [...latest.values()];
 }
 
-const PASSING_CHECK = new Set(["success", "skipped"]);
+/** GitHub treats `neutral` as passing for required checks (e.g. a bot with no rule to apply). */
+const PASSING_CHECK = new Set(["success", "skipped", "neutral"]);
 
 /** Shared tail of both gates (BR-7): open state first, then the gate's own reasons, then CI/merge/threads. */
 function verdict(pr: PrSnapshot, own: string[]): GateVerdict {

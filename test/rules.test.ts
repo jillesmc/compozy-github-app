@@ -169,14 +169,19 @@ describe("staging gate", () => {
     s.reviews = [{ author: BOT, is_app: true, state: "CHANGES_REQUESTED", commit_id: HEAD }];
     assert.deepEqual(deliveryGate(s, "staging").reasons, ["no_app_approval_on_head", "changes_requested"]);
   });
-  test("UT-044 deliveryGate: in_progress → checks_pending; failure → checks_failed", () => {
+  test("UT-044 deliveryGate: in_progress → checks_pending; failure → checks_failed; neutral passes", () => {
     const s = ready();
     s.checks.push({ status: "in_progress", conclusion: null });
     assert.deepEqual(deliveryGate(s, "staging").reasons, ["checks_pending"]);
     s.checks = [{ status: "completed", conclusion: "failure" }];
     assert.deepEqual(deliveryGate(s, "staging").reasons, ["checks_failed"]);
+    for (const conclusion of ["cancelled", "timed_out", "action_required", "stale"]) {
+      s.checks = [{ status: "completed", conclusion }];
+      assert.deepEqual(deliveryGate(s, "staging").reasons, ["checks_failed"], conclusion);
+    }
+    // neutral passes, as on GitHub (a bot that had no rule to apply, e.g. gitStream on a bot-authored PR).
     s.checks = [{ status: "completed", conclusion: "neutral" }];
-    assert.deepEqual(deliveryGate(s, "staging").reasons, ["checks_failed"]);
+    assert.deepEqual(deliveryGate(s, "staging").reasons, []);
   });
   test("UT-045 deliveryGate: CONFLICTING → not_mergeable; one unresolved thread → unresolved_threads", () => {
     const s = ready();

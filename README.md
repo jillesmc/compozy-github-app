@@ -25,8 +25,8 @@ review rules in code:
 2. Install the extension:
 
    ```console
-   $ compozy extension install github:<owner>/compozy-github-app@v0.2.0 --allow-unverified --yes
-   installed github-app-review 0.2.0 (global, all profiles)
+   $ compozy extension install github:<owner>/compozy-github-app@v0.2.1 --allow-unverified --yes
+   installed github-app-review 0.2.1 (global, all profiles)
    ```
 
 3. Set the variables (or `compozy extension secrets bind ... --vault-ref <ref>` for an existing
@@ -114,7 +114,7 @@ CompozyOS derives the tool IDs from the extension name with underscores:
 
 `merge_gate kind=delivery` is ready when: the PR is open with base `GITHUB_APP_BASE`; the app's latest review is
 `APPROVED` on the current head; no `CHANGES_REQUESTED` on the current head; every check run on the head
-succeeded or was skipped; GitHub reports it `MERGEABLE`; zero unresolved review threads. Reasons, one
+succeeded, was skipped or ended `neutral` (as GitHub treats it); GitHub reports it `MERGEABLE`; zero unresolved review threads. Reasons, one
 per failed condition in this order: `pr_not_open`, `base_mismatch`, `no_app_approval_on_head` /
 `approval_not_on_head`, `history_incomplete`, `changes_requested`, `checks_pending`, `checks_failed`,
 `not_mergeable`, `unresolved_threads`.
