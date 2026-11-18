@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+# Launcher for bin/sandbox/wrapper.ts (needs Node >= 24 for TypeScript type stripping and bwrap >= 0.8).
+# Node is taken from REVIEWER_NODE, else PATH. See docs/reviewer-sandbox.md.
+set -euo pipefail
+dir=$(dirname "$(readlink -f "$0")")
+node=${REVIEWER_NODE:-$(command -v node || true)}
+[ -n "$node" ] || { echo "reviewer-sandbox: node not found (set REVIEWER_NODE)" >&2; exit 1; }
+# --use-system-ca: host-side identity checks trust the OS store (corporate TLS inspection), like the sandbox.
+exec "$node" --disable-warning=ExperimentalWarning --use-system-ca "$dir/sandbox/wrapper.ts" "$@"

@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# Launcher for bin/sandbox/gateway.ts. Normally started by reviewer-sandbox, one per sandbox.
+#   reviewer-gateway --socket PATH [--log FILE] [--daemon-port 2123]
+set -euo pipefail
+dir=$(dirname "$(readlink -f "$0")")
+node=${REVIEWER_NODE:-$(command -v node || true)}
+[ -n "$node" ] || { echo "reviewer-gateway: node not found (set REVIEWER_NODE)" >&2; exit 1; }
+exec "$node" --disable-warning=ExperimentalWarning "$dir/sandbox/gateway.ts" "$@"
