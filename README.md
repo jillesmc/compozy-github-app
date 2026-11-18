@@ -25,8 +25,8 @@ review rules in code:
 2. Install the extension:
 
    ```console
-   $ compozy extension install github:<owner>/compozy-github-app@v0.2.1 --allow-unverified --yes
-   installed github-app-review 0.2.1 (global, all profiles)
+   $ compozy extension install github:<owner>/compozy-github-app@v0.2.2 --allow-unverified --yes
+   installed github-app-review 0.2.2 (global, all profiles)
    ```
 
 3. Set the variables (or `compozy extension secrets bind ... --vault-ref <ref>` for an existing
@@ -153,9 +153,9 @@ mergeability and threads. Reasons in order: `pr_not_open`, `not_app_authored`, `
 `upsert_promotion` compares `base...head` of `GITHUB_APP_PROMOTION`. No commits →
 `{"created":false,"number":null,"url":null,"head_sha":null,"included_prs":[]}` and nothing is written.
 An open `head → base` PR by another author → `promotion_conflict` naming it, nothing written. An open
-PR by the app → its body is updated (`PATCH`) with the current PR list, `created:false`. Otherwise it
+PR by the app → its title and body are updated (`PATCH`) with the current PR list, `created:false`. Otherwise it
 opens the PR (`POST`), `created:true`. `included_prs` are the `#N` references in the compared commits'
-subjects (`title (#N)` squash or `Merge pull request #N` merge commits). The comparison is paged until
+subjects (`title (#N)` squash or `Merge pull request #N` merge commits). The title is `KEY-1, KEY-2: Promote <head> to <base>`, with the Jira keys of the included PRs taken from the same subjects (`KEY-1: …` squash subjects or `Merge pull request #N from <owner>/KEY-1-…` branches); keys that do not fit GitHub's 256 characters become `+N`, and no key leaves the plain `Promote <head> to <base>`. The comparison is paged until
 every commit is read; beyond the safety cap (50 pages of 100) it refuses with `github_unavailable`
 ("comparison too large") and writes nothing. Without
 `GITHUB_APP_PROMOTION`, or for another repository, both promotion tools refuse with `invalid_input`.

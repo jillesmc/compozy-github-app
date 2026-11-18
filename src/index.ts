@@ -11,7 +11,7 @@ import { prContextTool } from "./tools/pr_context.ts";
 import { submitReviewTool } from "./tools/submit_review.ts";
 import { upsertPromotionTool } from "./tools/upsert_promotion.ts";
 
-export const EXTENSION_VERSION = "0.2.1";
+export const EXTENSION_VERSION = "0.2.2";
 /** The TS SDK describe payload carries a stale built-in floor; the spec requires CompozyOS ≥ 0.7.3. */
 export const MIN_COMPOZY_VERSION = "0.7.3";
 

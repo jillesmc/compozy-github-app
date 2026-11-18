@@ -18,6 +18,33 @@ export function includedPrs(commits: any[]): number[] {
   return [...numbers].sort((a, b) => a - b);
 }
 
+/** Jira key of an included PR: its branch (`Merge pull request #1 from org/KEY-1-slug`) or squash subject (`KEY-1: …`). */
+const JIRA_KEY = /^Merge pull request #\d+ from [^/\s]+\/([A-Z][A-Z0-9]+-\d+)(?![\d])|^([A-Z][A-Z0-9]+-\d+):/;
+
+/** Jira keys of the included PRs, unique, in commit order. */
+export function includedJiraKeys(commits: any[]): string[] {
+  const keys = new Set<string>();
+  for (const commit of commits) {
+    const match = JIRA_KEY.exec(String(commit?.commit?.message ?? "").split("\n")[0]!);
+    if (match) keys.add(match[1] ?? match[2]!);
+  }
+  return [...keys];
+}
+
+/** GitHub caps titles at 256 characters; keys that do not fit become `+N`. */
+const MAX_TITLE = 256;
+
+/** `KEY-1, KEY-2: Promote head to base`, or the plain title when no key was found. */
+export function promotionTitle(head: string, base: string, keys: string[]): string {
+  const plain = `Promote ${head} to ${base}`;
+  for (let shown = keys.length; shown > 0; shown--) {
+    const rest = keys.length - shown;
+    const title = `${keys.slice(0, shown).join(", ")}${rest > 0 ? ` +${rest}` : ""}: ${plain}`;
+    if (title.length <= MAX_TITLE) return title;
+  }
+  return plain;
+}
+
 /** Safety cap for the comparison: 50 pages of 100 commits. */
 export const MAX_COMPARE_PAGES = 50;
 
@@ -43,7 +70,7 @@ export const upsertPromotionTool: ToolDefinition = {
   name: "upsert_promotion",
   description:
     "Open or update the app's promotion pull request (GITHUB_APP_PROMOTION head → base, e.g. staging → " +
-    "main) listing the included PRs. Nothing to promote → created:false, number:null. Refuses when an " +
+    "main) listing the included PRs, titled with their Jira keys. Nothing to promote → created:false, number:null. Refuses when an " +
     "open promotion PR by another author exists. The app never approves or merges it.",
   inputSchema: {
     type: "object",
@@ -71,10 +98,11 @@ export const upsertPromotionTool: ToolDefinition = {
       throw reviewError("promotion_conflict", `open promotion PR #${other.number} by ${other.user?.login ?? "ghost"} (${head} → ${base}) already exists`);
     }
     const body = promotionBody(head, base, included);
+    const title = promotionTitle(head, base, includedJiraKeys(commits));
     const existing = open[0];
     const pr = existing
-      ? await gh.rest("PATCH", `${path}/pulls/${existing.number}`, { body })
-      : await gh.rest("POST", `${path}/pulls`, { title: `Promote ${head} to ${base}`, head, base, body });
+      ? await gh.rest("PATCH", `${path}/pulls/${existing.number}`, { title, body })
+      : await gh.rest("POST", `${path}/pulls`, { title, head, base, body });
     log.pr = pr.number;
     log.head_sha = String(pr.head?.sha ?? "").slice(0, 12);
     const result = { created: !existing, number: pr.number, url: pr.html_url, head_sha: pr.head?.sha ?? null, included_prs: included };

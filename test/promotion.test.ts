@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { afterEach, beforeEach, describe, test } from "node:test";
 
 import { promotionGate, type PrSnapshot, type PromotionConfig } from "../src/rules.ts";
-import { includedPrs, MAX_COMPARE_PAGES } from "../src/tools/upsert_promotion.ts";
+import { includedJiraKeys, includedPrs, MAX_COMPARE_PAGES, promotionTitle } from "../src/tools/upsert_promotion.ts";
 import { BOT, HEAD, OLD_HEAD, PROMO_HEAD, pull, REPO, review } from "./fixtures.ts";
 import { failure, harness } from "./helpers.ts";
 
@@ -117,8 +117,26 @@ describe("upsert_promotion and merge_gate kind=promotion over the fake GitHub", 
     const [patch, ...rest] = writes();
     assert.deepEqual(rest, []);
     assert.equal(patch!.path, `/repos/${REPO}/pulls/240`);
-    assert.deepEqual(Object.keys(patch!.body), ["body"]);
+    assert.deepEqual(Object.keys(patch!.body), ["title", "body"]);
+    assert.equal(patch!.body.title, "WID-18120, WID-18121, WID-18122: Promote staging to main");
     assert.match(patch!.body.body, /- #231\n- #233\n- #236/);
+  });
+
+  test("promotion title: Jira keys from merge-commit branches and squash subjects, deduplicated, +N past 256 chars", () => {
+    const subjects = [
+      "Merge pull request #225 from acme/WID-18098-team-setup",
+      "WID-18381: malformed id answers 404 (#231)",
+      "Merge pull request #232 from acme/WID-18381-follow-up",
+      "Merge pull request #9 from acme/dependabot/docker/x",
+      "chore: bump UTF-8 handling (#10)",
+    ];
+    const keys = includedJiraKeys(subjects.map(message => ({ commit: { message } })));
+    assert.deepEqual(keys, ["WID-18098", "WID-18381"]);
+    assert.equal(promotionTitle("staging", "production", keys), "WID-18098, WID-18381: Promote staging to production");
+    assert.equal(promotionTitle("staging", "production", []), "Promote staging to production");
+    const many = Array.from({ length: 40 }, (_, i) => `WID-${18000 + i}`);
+    const title = promotionTitle("staging", "production", many);
+    assert.ok(title.length <= 256 && / \+\d+: Promote staging to production$/.test(title), title);
   });
 
   test("UT-056 upsert_promotion: 260 compared commits are paged to the end; every PR is listed", async () => {
