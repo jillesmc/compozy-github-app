@@ -11,6 +11,7 @@
  *   curl -X POST http://127.0.0.1:8790/_fake/state -d '{"pr":{"draft":true}}'   # shallow-merge state
  *   curl -X POST http://127.0.0.1:8790/_fake/reset                               # default fixture
  *   curl http://127.0.0.1:8790/_fake/requests                                    # [{method,path,body}]
+ *   curl http://127.0.0.1:8790/_fake/state                                       # current state
  *
  * App endpoints need a `Bearer <jwt>`; repository endpoints need a `Bearer ghs_...` token.
  */
@@ -110,6 +111,7 @@ function answer(fake: FakeGitHub, req: FakeRequest, query: URLSearchParams): Fak
     return { status: 201, body: created };
   }
   const existing = s.pulls.find(p => req.path === `${pulls}/${p.number}`);
+  if (existing && req.method === "GET" && existing.number !== s.pr.number) return { status: 200, body: existing };
   if (existing && req.method === "PATCH") {
     Object.assign(existing, req.body);
     return { status: 200, body: existing };
@@ -148,7 +150,9 @@ export async function startFakeGitHub(options: { port?: number } = {}): Promise<
       body = raw;
     }
     let out: FakeResponse;
-    if (url.pathname === "/_fake/state" && incoming.method === "POST") {
+    if (url.pathname === "/_fake/state" && incoming.method === "GET") {
+      out = { status: 200, body: fake.state };
+    } else if (url.pathname === "/_fake/state" && incoming.method === "POST") {
       Object.assign(fake.state, body ?? {});
       out = { status: 200, body: { ok: true } };
     } else if (url.pathname === "/_fake/reset") {

@@ -1,14 +1,17 @@
 import type { ExtensionToolHandler, JSONValue, ToolResult } from "@compozy/extension-sdk";
 
 import { createAppAuth, type AppAuth } from "../auth.ts";
-import { allowedRepo, loadConfig, type Config, type Env, type Promotion } from "../config.ts";
+import { allowedRepo, loadConfig, type Config, type Env } from "../config.ts";
 import { causeCode, reviewError, ReviewError, toolError } from "../errors.ts";
 import { createGitHub, type GitHub } from "../github.ts";
+import type { ReadFile, RepoPolicy } from "../policy.ts";
 import { parsePass, type AppReview } from "../rules.ts";
 
 export interface ToolDeps {
   env: Env;
   fetch?: typeof fetch;
+  /** Reads the approved policy version (tests hook it to change the file after the read). */
+  readFile?: ReadFile;
   now?: () => number;
   stderr?: { write(line: string): unknown };
   /** Doctor's duplicate-review scan budget in ms (default 10 000); tests shorten it. */
@@ -37,9 +40,13 @@ export interface ToolDefinition {
 
 const runtimes = new WeakMap<ToolDeps, { fingerprint: string; runtime: Runtime }>();
 
-/** Loads config on every call (credential_absent before any I/O); reuses auth while the key is unchanged. */
+/** Loads the credentials and the approved policy on every call (refusals before any network call). */
 export function runtime(deps: ToolDeps): Runtime {
-  const config = loadConfig(deps.env);
+  return runtimeFor(deps, loadConfig(deps.env, deps.readFile));
+}
+
+/** The runtime for an already loaded config; reuses auth while the key is unchanged. */
+export function runtimeFor(deps: ToolDeps, config: Config): Runtime {
   const fingerprint = JSON.stringify([config.appId, config.installationId, config.privateKey, config.apiUrl]);
   const cached = runtimes.get(deps);
   if (cached?.fingerprint === fingerprint) return { ...cached.runtime, config };
@@ -89,10 +96,10 @@ export function jsonResult(value: JSONValue): ToolResult {
   return { content: [{ type: "text", text }], structured: value, truncated: false, bytes: Buffer.byteLength(text), duration_ms: 0 };
 }
 
-export const REPO_SCHEMA = { type: "string", pattern: "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$", description: "owner/name, must be allowlisted" };
+export const REPO_SCHEMA = { type: "string", pattern: "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$", description: "owner/name, must be in the approved policy" };
 export const NUMBER_SCHEMA = { type: "integer", minimum: 1, description: "pull request number" };
 
-/** Shared input: an allowlisted repo and a PR number (repo checked before any HTTP call). */
+/** Shared input: a repo of the approved policy and a PR number (repo checked before any HTTP call). */
 export function target(input: Record<string, unknown>, rt: Runtime, log: LogFields) {
   const repo = allowedRepo(input.repo, rt.config);
   const number = input.number;
@@ -120,10 +127,8 @@ export function onlyKeys(input: Record<string, unknown>, allowed: string[]): voi
   if (extra) throw reviewError("invalid_input", `${extra}: unknown field`);
 }
 
-/** The `GITHUB_APP_PROMOTION` setting for `repo` (case-insensitive), refused before any HTTP call. */
-export function promotionTarget(rt: Runtime, repo: string): Promotion {
-  const promotion = rt.config.promotion;
-  if (!promotion) throw reviewError("invalid_input", "GITHUB_APP_PROMOTION is not set or not owner/name:head->base");
-  if (promotion.repo.toLowerCase() !== repo.toLowerCase()) throw reviewError("invalid_input", `repo: ${repo} is not the promotion repository`);
-  return promotion;
+/** The repository's promotion pair and approvers from the approved policy, refused before any HTTP call. */
+export function promotionTarget(policy: Readonly<RepoPolicy>): { head: string; base: string; approvers: string[] } {
+  if (!policy.promotion) throw reviewError("invalid_input", `repo: ${policy.repo} has no promotion in the approved policy`);
+  return { ...policy.promotion, approvers: [...policy.approvers] };
 }

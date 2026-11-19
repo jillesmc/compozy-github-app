@@ -19,7 +19,7 @@ export interface Minted {
 }
 
 export interface AppAuth extends TokenProvider {
-  /** Mints (or reuses) the token for one allowlisted repository; exposes its permissions. */
+  /** Mints (or reuses) the token for one policy repository; exposes its permissions. */
   mint(repo: string): Promise<Minted>;
   /** `GET <path>` authenticated as the app (JWT): `/app`, `/app/installations/{id}`. */
   appGet(path: string): Promise<any>;
@@ -43,7 +43,7 @@ export function appJwt(appId: string, key: KeyObject, nowMs: number): string {
 }
 
 /**
- * The only holder of the private key. Installation tokens are scoped to one allowlisted repository
+ * The only holder of the private key. Installation tokens are scoped to one policy repository
  * each (so a repo missing from the installation fails alone) and cached until 5 min before expiry.
  */
 export function createAppAuth(options: AuthOptions): AppAuth {

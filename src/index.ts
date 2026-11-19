@@ -2,8 +2,9 @@ import { pathToFileURL } from "node:url";
 
 import { Extension, type ExtensionOptions } from "@compozy/extension-sdk";
 
-import { REQUIRED_ENV } from "./config.ts";
+import { OPTIONAL_ENV, REQUIRED_ENV } from "./config.ts";
 import { doctorHandler } from "./doctor.ts";
+import { policyHandler } from "./policy-cmd.ts";
 import { trustSystemCertificates } from "./system-ca.ts";
 import { toolHandler, type ToolDeps, type ToolDefinition } from "./tools/common.ts";
 import { mergeGateTool } from "./tools/merge_gate.ts";
@@ -11,7 +12,7 @@ import { prContextTool } from "./tools/pr_context.ts";
 import { submitReviewTool } from "./tools/submit_review.ts";
 import { upsertPromotionTool } from "./tools/upsert_promotion.ts";
 
-export const EXTENSION_VERSION = "0.2.2";
+export const EXTENSION_VERSION = "0.3.0";
 /** The TS SDK describe payload carries a stale built-in floor; the spec requires CompozyOS ≥ 0.7.3. */
 export const MIN_COMPOZY_VERSION = "0.7.3";
 
@@ -35,7 +36,7 @@ export function createExtension(options: ExtensionOptions = {}, deps: Partial<To
       subprocess: { command: "node", args: ["index.js"] },
       capabilities: { provides: [] },
       permissions: { requires: [] },
-      requires_env: [...REQUIRED_ENV],
+      requires_env: [...REQUIRED_ENV, ...OPTIONAL_ENV],
     },
     options
   );
@@ -49,12 +50,40 @@ export function createExtension(options: ExtensionOptions = {}, deps: Partial<To
     {
       description:
         "Operator command (compozy extension exec github-app-review --cmd doctor). Agents should not call this tool: " +
-        "it reports app identity, installation, token mint, allowlisted repositories and rate limit.",
+        "it reports app identity, installation, token mint, the approved policy and its repositories, and rate limit.",
       inputSchema: { type: "object", additionalProperties: false, properties: {} },
       readOnly: true,
-      command: { verb: "doctor", summary: "Check the GitHub App credentials, installation and allowlisted repositories" },
+      command: { verb: "doctor", summary: "Check the GitHub App credentials, installation and approved policy repositories" },
     },
     doctorHandler(toolDeps)
+  );
+  const empty = { type: "object", additionalProperties: false, properties: {} } as const;
+  extension.tool(
+    "policy",
+    {
+      description:
+        "Operator command (compozy extension exec github-app-review --cmd policy). Agents should not call this tool: " +
+        "it shows the policy working-copy digest, the active approved digest, the approval state and the repo diff.",
+      inputSchema: empty,
+      readOnly: true,
+      command: { verb: "policy", summary: "Show the policy working copy, the active approved version and the repo diff" },
+    },
+    policyHandler("policy", toolDeps)
+  );
+  extension.tool(
+    "policy_stage",
+    {
+      description:
+        "Operator command (compozy extension exec github-app-review --cmd policy-stage). Agents should not call this tool: " +
+        "it copies the schema-checked policy working copy to policies/<sha256>.toml and prints the line that activates it.",
+      inputSchema: empty,
+      // Declared read-only so a trusted source (the recommended policy) lets the operator run it: it
+      // touches no GitHub or approval state, only an idempotent content-addressed copy of the working
+      // copy; GITHUB_APP_POLICY_DIGEST alone activates a version.
+      readOnly: true,
+      command: { verb: "policy-stage", summary: "Stage the policy working copy as an immutable digest-addressed version" },
+    },
+    policyHandler("policy-stage", toolDeps)
   );
   return extension;
 }

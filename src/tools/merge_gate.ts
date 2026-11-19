@@ -39,10 +39,10 @@ export async function snapshot(rt: Runtime, t: ReturnType<typeof target>): Promi
 export const mergeGateTool: ToolDefinition = {
   name: "merge_gate",
   description:
-    "Deterministic merge readiness of a pull request. kind=delivery: the PR targets GITHUB_APP_BASE, the app " +
-    "approved the current head, no " +
+    "Deterministic merge readiness of a pull request. kind=delivery: the PR targets the repository's delivery_base " +
+    "(approved policy), the app approved the current head, no " +
     "changes requested on it, checks green, mergeable, no unresolved threads. kind=promotion: the app opened the " +
-    "configured promotion PR and a configured approver approved its current head, plus the same check, " +
+    "repository's promotion PR and a configured approver approved its current head, plus the same check, " +
     "mergeability and thread rules. Returns {ready, head_sha, reasons}.",
   inputSchema: {
     type: "object",
@@ -55,9 +55,9 @@ export const mergeGateTool: ToolDefinition = {
     onlyKeys(input, ["repo", "number", "kind"]);
     const t = target(input, rt, log);
     if (input.kind !== "delivery" && input.kind !== "promotion") throw reviewError("invalid_input", "kind must be delivery or promotion");
-    const promotion = input.kind === "promotion" ? promotionTarget(rt, t.repo.full) : null;
+    const promotion = input.kind === "promotion" ? promotionTarget(t.repo.policy) : null;
     const pr = await snapshot(rt, t);
-    const verdict = promotion ? promotionGate(pr, { ...promotion, approvers: rt.config.approvers }) : deliveryGate(pr, rt.config.base);
+    const verdict = promotion ? promotionGate(pr, promotion) : deliveryGate(pr, t.repo.policy.delivery_base);
     log.head_sha = verdict.head_sha.slice(0, 12);
     return jsonResult(verdict as unknown as JSONValue);
   },

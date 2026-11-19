@@ -5,7 +5,7 @@ import { describe, test } from "node:test";
 import { doctorHandler, MAX_OPEN_PRS } from "../src/doctor.ts";
 import { marker } from "../src/rules.ts";
 import { BOT, HEAD, REPO, review } from "./fixtures.ts";
-import { failure, harness } from "./helpers.ts";
+import { DEFAULT_POLICY, failure, harness } from "./helpers.ts";
 
 const now = Date.parse("2026-11-17T17:05:00Z");
 
@@ -22,11 +22,11 @@ describe("doctor and credentials", () => {
         "app: widgets-reviewer (id 123456)",
         "installation: 7890123 on acme (selected repositories)",
         "token mint: ok (expires in 59m)",
+        `policy: approved ${h.policy.digest} (${h.policy.version})`,
         "repos:",
         "  acme/widgets: ok (pull_requests: write, contents: write, checks: read, statuses: read)",
+        "    delivery base: staging; promotion: staging -> main, approvers: octocat",
         "duplicate reviews: none",
-        "delivery base: staging",
-        "promotion: staging -> main, approvers: octocat",
         "rate limit: 4987/5000 (resets 18:04Z)",
       ].join("\n")
     );
@@ -62,15 +62,15 @@ describe("doctor and credentials", () => {
     h.gh.state.rejectJwt = true;
     const doctor = await failure(h.call("doctor"));
     assert.equal(doctor.code, "credential_invalid");
-    assert.equal(doctor.message, "app: unknown; token mint: failed (401)");
+    assert.equal(doctor.message, `app: unknown; token mint: failed (401); policy: approved ${h.policy.digest} (${h.policy.version})`);
     const tool = await failure(h.call("pr_context", { repo: REPO, number: 231 }));
     assert.equal(tool.code, "credential_invalid");
     assert.equal(tool.toolCode, "tool_unavailable");
     await h.close();
   });
 
-  test("UT-063 credentials: allowlisted repo absent from the installation → repo_not_installed; doctor marks it", async () => {
-    const h = await harness({ GITHUB_APP_REPOS: `${REPO},acme/missing` });
+  test("UT-063 credentials: policy repo absent from the installation → repo_not_installed; doctor marks it", async () => {
+    const h = await harness({}, `${DEFAULT_POLICY}\n[repos."acme/missing"]\ndelivery_base = "main"\n`);
     const doctor = await h.call("doctor");
     assert.deepEqual(doctor.repos.map((r: any) => `${r.repo}: ${r.status}`), [
       "acme/widgets: ok",
@@ -95,7 +95,7 @@ describe("doctor and credentials", () => {
     ];
     const handler = (await import("../src/doctor.ts")).doctorHandler(h.deps);
     const text: string = ((await handler({ input: {} } as never)) as any).content[0].text;
-    assert.match(text, /\nduplicate reviews:\n  acme\/widgets#231 head 9f2c1e0a7b3d pass=1: 2 reviews\ndelivery base: staging\npromotion:/);
+    assert.match(text, /\nduplicate reviews:\n  acme\/widgets#231 head 9f2c1e0a7b3d pass=1: 2 reviews\nrate limit:/);
     assert.ok(h.gh.requests.some(r => r.path === `/repos/${REPO}/pulls` ));
     await h.close();
   });
@@ -104,7 +104,7 @@ describe("doctor and credentials", () => {
     const h = await harness();
     h.gh.state.pulls = Array.from({ length: MAX_OPEN_PRS + 1 }, (_, i) => ({ ...h.gh.state.pr, number: 1000 + i }));
     const result = (await doctorHandler(h.deps)({ input: {} } as never)) as any;
-    assert.match(result.content[0].text, /\nduplicate reviews: incomplete \(more than 200 open PRs\)\ndelivery base: staging\npromotion:/);
+    assert.match(result.content[0].text, /\nduplicate reviews: incomplete \(more than 200 open PRs\)\nrate limit:/);
     assert.ok(!h.gh.requests.some(r => r.path.endsWith("/reviews")), "no per-PR scan past the cap");
     await h.close();
   });
@@ -119,9 +119,21 @@ describe("doctor and credentials", () => {
     }) as typeof fetch;
     h.deps.doctorScanMs = 50;
     const result = (await doctorHandler(h.deps)({ input: {} } as never)) as any;
-    assert.match(result.content[0].text, /\nduplicate reviews: unknown \(scan timed out\)\ndelivery base: staging\npromotion: .*\nrate limit: 4987\/5000/);
+    assert.match(result.content[0].text, /\nduplicate reviews: unknown \(scan timed out\)\nrate limit: 4987\/5000/);
     assert.equal(result.structured.token_mint.ok, true);
     await new Promise(resolve => setTimeout(resolve, 350)); // let the abandoned scan settle before closing the fake
+    await h.close();
+  });
+
+  test("UT-060 doctor: policy unapproved → token mint: not attempted (policy unapproved); exit 1; no token minted", async () => {
+    const h = await harness({ GITHUB_APP_POLICY_DIGEST: undefined });
+    const doctor = await failure(h.call("doctor"));
+    assert.equal(doctor.code, "policy_unapproved");
+    assert.equal(
+      doctor.message,
+      "app: widgets-reviewer (id 123456); installation: 7890123 on acme (selected repositories); token mint: not attempted (policy unapproved); policy: unapproved (policy_unapproved: GITHUB_APP_POLICY_DIGEST is not set); rate limit: unknown"
+    );
+    assert.equal(h.gh.state.minted, 0);
     await h.close();
   });
 
@@ -132,30 +144,6 @@ describe("doctor and credentials", () => {
     assert.match(String(rate.headers.authorization), /^Bearer ghs_/);
     const source = readFileSync(new URL("../src/doctor.ts", import.meta.url), "utf8");
     assert.doesNotMatch(source, /from "\.\/http\.ts"|\.token\b|authorization/);
-    await h.close();
-  });
-
-  test("UT-061 config: GITHUB_APP_BASE unset → credential_absent naming it; zero HTTP calls", async () => {
-    const h = await harness({ GITHUB_APP_BASE: undefined });
-    const error = await failure(h.call("pr_context", { repo: REPO, number: 231 }));
-    assert.equal(error.code, "credential_absent");
-    assert.match(error.message, /GITHUB_APP_BASE not set/);
-    assert.equal(h.fetches(), 0);
-    await h.close();
-  });
-
-  test("UT-061 config: GITHUB_APP_PROMOTION must promote GITHUB_APP_BASE into another branch → config_invalid", async () => {
-    for (const promotion of [`${REPO}:develop->main`, `${REPO}:staging->staging`, "not a promotion"]) {
-      const h = await harness({ GITHUB_APP_PROMOTION: promotion });
-      const error = await failure(h.call("merge_gate", { repo: REPO, number: 231, kind: "delivery" }));
-      assert.deepEqual([error.code, error.toolCode], ["config_invalid", "tool_unavailable"], promotion);
-      assert.match(error.message, /GITHUB_APP_PROMOTION/);
-      assert.equal(h.fetches(), 0);
-      await h.close();
-    }
-    // Unset is fine: promotion is optional.
-    const h = await harness({ GITHUB_APP_PROMOTION: undefined });
-    assert.equal((await h.call("merge_gate", { repo: REPO, number: 231, kind: "delivery" })).head_sha.length, 40);
     await h.close();
   });
 });

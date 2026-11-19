@@ -70,12 +70,12 @@ export function reviewBody(headSha: string, pass: 1 | 2, summary: string, moved:
   return body;
 }
 
-/** Open, non-draft, into `GITHUB_APP_BASE`, and still on `headSha`; otherwise the matching refusal. */
+/** Open, non-draft, into the repository's `delivery_base`, and still on `headSha`; otherwise the matching refusal. */
 function assertReviewable(pr: any, number: number, headSha: string, base: string): void {
   const state = prState(pr);
   if (state !== "open" || pr.draft) throw reviewError("pr_not_reviewable", `pull request #${number} is ${pr.draft && state === "open" ? "a draft" : state}`);
   if (pr.base?.ref !== base) {
-    throw reviewError("base_not_reviewable", `pull request #${number} targets ${pr.base?.ref}, not GITHUB_APP_BASE (${base})`);
+    throw reviewError("base_not_reviewable", `pull request #${number} targets ${pr.base?.ref}, not delivery_base (${base})`);
   }
   if (pr.head?.sha !== headSha) throw reviewError("head_moved", `head_sha ${headSha} is not the current head; current head is ${pr.head?.sha}`);
 }
@@ -85,7 +85,7 @@ export const submitReviewTool: ToolDefinition = {
   description:
     "Post this app's review of a pull request head. The event is derived from the findings' severities " +
     "(blocker/major → REQUEST_CHANGES, else APPROVE); findings outside the diff move to the summary. " +
-    "Reviews only pull requests into GITHUB_APP_BASE. Refuses a head that is not current, a second review " +
+    "Reviews only pull requests into the repository's delivery_base (approved policy). Refuses a head that is not current, a second review " +
     "of the same head, drafts, and closed PRs. " +
     "`rereview: true` posts one pass 2 on a head whose bot thread got a non-bot reply after pass 1.",
   inputSchema: {
@@ -121,7 +121,7 @@ export const submitReviewTool: ToolDefinition = {
   readOnly: false,
   async handle(input, rt, log) {
     onlyKeys(input, ["repo", "number", "head_sha", "summary", "findings", "rereview"]);
-    const { number, gh, base } = target(input, rt, log);
+    const { repo, number, gh, base } = target(input, rt, log);
     const headSha = input.head_sha;
     if (typeof headSha !== "string" || !SHA.test(headSha)) throw reviewError("invalid_input", "head_sha must be a 40-character lowercase hex SHA");
     log.head_sha = headSha.slice(0, 12);
@@ -131,7 +131,7 @@ export const submitReviewTool: ToolDefinition = {
     const rereview = input.rereview === true;
 
     const pr = await gh.rest("GET", `${base}/pulls/${number}`);
-    assertReviewable(pr, number, headSha, rt.config.base);
+    assertReviewable(pr, number, headSha, repo.policy.delivery_base);
 
     const { commentable } = await prFiles(gh, base, number, pr.changed_files);
     const { inline, moved } = partitionAnchors(findings, commentable);
@@ -150,7 +150,7 @@ export const submitReviewTool: ToolDefinition = {
     const body = reviewBody(headSha, decision.pass, summary, moved);
     // Re-validate the PR right before writing: head, base, draft or state may have changed during the reads.
     // ponytail: GitHub has no compare-and-swap for reviews; a change between this GET and the POST stays possible.
-    assertReviewable(await gh.rest("GET", `${base}/pulls/${number}`), number, headSha, rt.config.base);
+    assertReviewable(await gh.rest("GET", `${base}/pulls/${number}`), number, headSha, repo.policy.delivery_base);
 
     const review = await gh.rest("POST", `${base}/pulls/${number}/reviews`, {
       commit_id: headSha,

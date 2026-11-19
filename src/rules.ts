@@ -74,7 +74,7 @@ export interface GateVerdict {
   reasons: string[];
 }
 
-/** `GITHUB_APP_PROMOTION` branches and `GITHUB_APP_PROMOTION_APPROVERS` logins. */
+/** A repository's promotion branches and approver logins (approved policy). */
 export interface PromotionConfig {
   head: string;
   base: string;
@@ -175,7 +175,7 @@ function verdict(pr: PrSnapshot, own: string[]): GateVerdict {
   return { ready: reasons.length === 0, head_sha: head, reasons };
 }
 
-/** BR-7 for the delivery branch (`GITHUB_APP_BASE`): one reason per failed condition, in a stable order. */
+/** BR-7 for the delivery branch (the repository's `delivery_base`): one reason per failed condition, in a stable order. */
 export function deliveryGate(pr: PrSnapshot, base: string): GateVerdict {
   const own: string[] = [];
   const head = pr.head_sha;

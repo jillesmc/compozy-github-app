@@ -8,13 +8,14 @@ review rules in code:
   `REQUEST_CHANGES`, otherwise `APPROVE`); the agent cannot choose it;
 - a review is posted only on the PR's current head (`commit_id = head_sha`);
 - one review per head (pass 1), plus one contested re-review of the same head (pass 2);
-- only allowlisted repositories;
+- only repositories of the operator's **approved policy** (a digest-addressed file, see
+  [docs/policy.md](docs/policy.md)); an unapproved or edited policy makes every tool refuse;
 - findings outside the diff move to the review summary under "Outside the diff", never dropped;
-- the app reviews only pull requests into one delivery branch, `GITHUB_APP_BASE` (for example `main`
-  or `staging`); any other base is refused;
-- optionally, the app opens a promotion PR from that branch into another one (`upsert_promotion`,
-  e.g. `staging` → `main`) and a configured approver approves it on GitHub; the app never approves or
-  merges it.
+- per repository, the app reviews only pull requests into its delivery branch (`delivery_base`, for
+  example `main` or `staging`); any other base is refused;
+- optionally, per repository, the app opens a promotion PR from that branch into another one
+  (`upsert_promotion`, e.g. `staging` → `main`) and a policy approver approves it on GitHub; the app
+  never approves or merges it.
 
 ## Install
 
@@ -25,63 +26,87 @@ review rules in code:
 2. Install the extension:
 
    ```console
-   $ compozy extension install github:<owner>/compozy-github-app@v0.2.2 --allow-unverified --yes
-   installed github-app-review 0.2.2 (global, all profiles)
+   $ compozy extension install github:<owner>/compozy-github-app@v0.3.0 --allow-unverified --yes
+   installed github-app-review 0.3.0 (global, all profiles)
    ```
 
-3. Set the variables (or `compozy extension secrets bind ... --vault-ref <ref>` for an existing
+3. Set the credentials (or `compozy extension secrets bind ... --vault-ref <ref>` for an existing
    Vault reference):
 
    ```console
    $ compozy extension secrets set github-app-review --env GITHUB_APP_PRIVATE_KEY --value-stdin < app.private-key.pem
    $ printf '<app id>' | compozy extension secrets set github-app-review --value-stdin --env GITHUB_APP_ID
    $ printf '<installation id>' | compozy extension secrets set github-app-review --value-stdin --env GITHUB_APP_INSTALLATION_ID
-   $ printf 'owner/repo' | compozy extension secrets set github-app-review --value-stdin --env GITHUB_APP_REPOS
-   $ printf 'staging' | compozy extension secrets set github-app-review --value-stdin --env GITHUB_APP_BASE
-   $ printf 'owner/repo:staging->main' | compozy extension secrets set github-app-review --value-stdin --env GITHUB_APP_PROMOTION
-   $ printf 'login' | compozy extension secrets set github-app-review --value-stdin --env GITHUB_APP_PROMOTION_APPROVERS
    ```
 
    Delete the downloaded key file afterwards (`shred -u`).
 
 | Variable | Meaning |
 | --- | --- |
-| `GITHUB_APP_ID` | App id |
-| `GITHUB_APP_INSTALLATION_ID` | Installation id on the organization |
-| `GITHUB_APP_PRIVATE_KEY` | The app private key (PEM); the only secret |
-| `GITHUB_APP_REPOS` | Comma-separated `owner/name` allowlist |
-| `GITHUB_APP_BASE` | The delivery branch the app reviews and gates, e.g. `main` or `staging` (required) |
-| `GITHUB_APP_PROMOTION` | Optional `owner/name:head->base`, e.g. `acme/widgets:staging->main`; `head` must equal `GITHUB_APP_BASE` and `base` must differ from it (else `config_invalid`) |
-| `GITHUB_APP_PROMOTION_APPROVERS` | Comma-separated GitHub logins allowed to approve promotions, e.g. `octocat` |
+| `GITHUB_APP_ID` | App id (required) |
+| `GITHUB_APP_INSTALLATION_ID` | Installation id on the organization (required) |
+| `GITHUB_APP_PRIVATE_KEY` | The app private key (PEM); the only secret (required) |
+| `GITHUB_APP_POLICY_DIGEST` | sha256 of the approved policy version to honor (optional: while unset every tool refuses with `policy_unapproved`) |
+| `GITHUB_APP_POLICY_FILE` | Absolute path of the policy working copy (optional, else `config_invalid`; default `$XDG_CONFIG_HOME/compozy-github-app/policy.toml`, else `~/.config/compozy-github-app/policy.toml`) |
 
-With a single-branch flow set `GITHUB_APP_BASE=main` and leave `GITHUB_APP_PROMOTION` unset. Every
-variable is declared in `requires_env`; a missing `GITHUB_APP_PRIVATE_KEY`, `GITHUB_APP_ID`,
-`GITHUB_APP_INSTALLATION_ID`, `GITHUB_APP_REPOS` or `GITHUB_APP_BASE` makes every tool fail with
-`credential_absent` before any network call.
+All five are declared in `requires_env`; the extension stays active while the two optional ones are
+unset. A missing credential makes every tool fail with `credential_absent` before any network call.
 
-Installation tokens are minted per allowlisted repository (scoped to that one repository), cached until
+4. Write the policy and approve it. The working copy holds one block per repository (exact format in
+   [docs/policy.md](docs/policy.md)):
+
+   ```toml
+   [repos."acme/widgets"]
+   delivery_base = "staging"
+   promotion = { head = "staging", base = "main" }   # optional
+   approvers = ["octocat"]                           # required when promotion is set
+   ```
+
+   Tools never read the working copy. `policy-stage` copies it, schema-checked, to the immutable
+   `policies/<sha256>.toml` next to it, and the digest secret activates that version:
+
+   ```console
+   $ compozy extension exec github-app-review --cmd policy-stage
+   staged    /home/user/.config/compozy-github-app/policies/9c1d…e7.toml
+   activate  printf 9c1d…e7 | compozy extension secrets set github-app-review --env GITHUB_APP_POLICY_DIGEST --value-stdin
+   $ printf 9c1d…e7 | compozy extension secrets set github-app-review --env GITHUB_APP_POLICY_DIGEST --value-stdin
+   $ compozy extension exec github-app-review --cmd policy
+   working   /home/user/.config/compozy-github-app/policy.toml  digest 9c1d…e7
+   active    9c1d…e7 (policies/9c1d…e7.toml)
+   state     approved (the working copy is the active version)
+   ```
+
+   A running extension keeps the environment it started with: if `policy -o json` still shows the old
+   `active.digest` (or `unset`), restart the extension (`compozy extension disable github-app-review &&
+   compozy extension enable github-app-review`) and check again. Once active, CompozyOS redacts the digest
+   (a secret value) in tool text; the `state` line and the `structured` JSON fields stay readable (see
+   [docs/policy.md](docs/policy.md#commands)). With a single-branch flow set `delivery_base = "main"` and
+   omit `promotion`.
+
+Installation tokens are minted per policy repository (scoped to that one repository), cached until
 5 minutes before they expire, and refreshed after a 401.
 
-4. Check it:
+5. Check it:
 
    ```console
    $ compozy extension exec github-app-review --cmd doctor
    app: widgets-reviewer (id 123456)
    installation: 7890123 on acme (selected repositories)
    token mint: ok (expires in 59m)
+   policy: approved 9c1d…e7 (/home/user/.config/compozy-github-app/policies/9c1d…e7.toml)
    repos:
      acme/widgets: ok (pull_requests: write, contents: write, checks: read, statuses: read)
+       delivery base: staging; promotion: staging -> main, approvers: octocat
    duplicate reviews: none
-   delivery base: staging
-   promotion: staging -> main, approvers: octocat
    rate limit: 4987/5000 (resets 18:04Z)
    ```
 
-   The doctor exits 1 when no token can be minted (missing or rejected key, or no allowlisted repository
-   installed); the cause is in `-o json` under `error.details.operator_cause`, for example
-   `token mint: failed (credential_absent: ...)` or `token mint: failed (401)`. A repository missing from
+   The doctor exits 1 when the policy is not approved (`policy: unapproved (...)` or `invalid`) or no
+   token can be minted (missing or rejected key, or no policy repository installed); the cause is in
+   `-o json` under `error.details.operator_cause`, for example `token mint: failed (credential_absent: ...)`,
+   `token mint: not attempted (policy unapproved)` or `token mint: failed (401)`. A repository missing from
    the installation is listed as `not installed`. CompozyOS redacts values bound as extension secrets
-   (repository names, approvers, ids) from tool text, so they can appear as `[REDACTED]`.
+   (ids) from tool text, so they can appear as `[REDACTED]`.
 
    `duplicate reviews` checks **open PRs only** (closed and merged PRs are not scanned; an accepted
    operator decision), up to 200 per installed repository, for a head with more
@@ -109,10 +134,17 @@ CompozyOS derives the tool IDs from the extension name with underscores:
 | `pr_context` (read) | `repo`, `number` | `head_sha`, refs, `author`, `state`, `is_draft`, `title`, `body`, `files`, `files_truncated`, `commentable` lines per path and side, `app_reviews` (with `pass`), `app_threads` (with the `commit_id` each was opened on), `conventions` (`ref`, `review_md`, `factory_toml`: the `REVIEW.md` and `.compozy/factory/factory.toml` of the base branch, `null` when absent, so a PR never supplies the rules it is judged by) |
 | `submit_review` (write) | `repo`, `number`, `head_sha`, `summary` (≤ 8 000), `findings` (≤ 50: `path`, `line`, `side?`, `start_line?`, `severity` `blocker\|major\|minor\|nit`, `title`, `body` ≤ 4 000), `rereview?` | `review_id`, `event`, `pass`, `inline`, `moved_to_summary`, `url` |
 | `merge_gate` (read) | `repo`, `number`, `kind` (`delivery` \| `promotion`) | `ready`, `head_sha`, `reasons` |
-| `upsert_promotion` (write) | `repo` (the `GITHUB_APP_PROMOTION` repository) | `created`, `number`, `url`, `head_sha`, `included_prs` |
+| `upsert_promotion` (write) | `repo` (a policy repository with `promotion`), `key_pattern?` (regular expression of one work-item key, ≤ 200 chars) | `created`, `number`, `url`, `head_sha`, `included_prs` |
 | `doctor` (read; operator) | — | The doctor report; agents should not call it |
+| `policy` (read; operator, `--cmd policy`) | — | Working-copy digest, active digest, approval state, repo diff; no credentials or network |
+| `policy_stage` (operator, `--cmd policy-stage`; declared read-only: it only writes the idempotent `policies/<sha256>.toml` copy and activates nothing) | — | Stages the working copy as `policies/<sha256>.toml`; no credentials or network |
 
-`merge_gate kind=delivery` is ready when: the PR is open with base `GITHUB_APP_BASE`; the app's latest review is
+Every agent tool loads the approved policy first, on every call, before any network call: unset or
+mismatched `GITHUB_APP_POLICY_DIGEST`, or an absent version file → `policy_unapproved`; a version that
+does not parse → `config_invalid`; a repository not in it → `repo_not_allowed`. `repo` resolves that
+repository's `delivery_base`, `promotion` and `approvers`.
+
+`merge_gate kind=delivery` is ready when: the PR is open with base the repository's `delivery_base`; the app's latest review is
 `APPROVED` on the current head; no `CHANGES_REQUESTED` on the current head; every check run on the head
 succeeded, was skipped or ended `neutral` (as GitHub treats it); GitHub reports it `MERGEABLE`; zero unresolved review threads. Reasons, one
 per failed condition in this order: `pr_not_open`, `base_mismatch`, `no_app_approval_on_head` /
@@ -132,7 +164,7 @@ of the head (`created_at` > `submitted_at`). Anything else fails `rereview_not_e
 
 Before posting, `submit_review` re-reads the review history (complete, or it refuses with
 `github_unavailable`) and then re-fetches the PR: if it is no longer open, became a draft, was retargeted
-away from `GITHUB_APP_BASE`, or its head moved, it refuses (`pr_not_reviewable`, `base_not_reviewable`,
+away from the repository's `delivery_base`, or its head moved, it refuses (`pr_not_reviewable`, `base_not_reviewable`,
 `head_moved`) and posts nothing. GitHub offers no compare-and-swap on reviews, so a change in the
 moment between that last read and the POST remains possible; `commit_id` still pins the review to the
 head that was checked.
@@ -141,24 +173,35 @@ Findings outside the diff keep their full text in the review body. If the assemb
 summary and those findings) exceeds 60 000 characters (GitHub's limit is 65 536), the call is refused with
 `field_too_long` naming the review body, and nothing is posted.
 
-`merge_gate kind=promotion` (BR-8) applies to the `GITHUB_APP_PROMOTION` repository only and is ready
-when: the PR is open and authored by the app (`<slug>[bot]`); its base and head are the configured
+`merge_gate kind=promotion` (BR-8) applies to a policy repository with `promotion` and is ready
+when: the PR is open and authored by the app (`<slug>[bot]`); its base and head are the repository's
 promotion branches (else `base_mismatch`; the repository's default branch plays no part); the latest
-`APPROVED`/`CHANGES_REQUESTED` review of a login in `GITHUB_APP_PROMOTION_APPROVERS` (case-insensitive;
+`APPROVED`/`CHANGES_REQUESTED` review of a login in the repository's `approvers` (case-insensitive;
 never the app) is `APPROVED` on the current head; plus the delivery rules for changes requested, checks,
 mergeability and threads. Reasons in order: `pr_not_open`, `not_app_authored`, `base_mismatch`,
 `promotion_not_approved`, `history_incomplete`, `changes_requested`, `checks_pending`, `checks_failed`, `not_mergeable`,
 `unresolved_threads`.
 
-`upsert_promotion` compares `base...head` of `GITHUB_APP_PROMOTION`. No commits →
+`upsert_promotion` compares `base...head` of the repository's `promotion`. No commits →
 `{"created":false,"number":null,"url":null,"head_sha":null,"included_prs":[]}` and nothing is written.
 An open `head → base` PR by another author → `promotion_conflict` naming it, nothing written. An open
 PR by the app → its title and body are updated (`PATCH`) with the current PR list, `created:false`. Otherwise it
 opens the PR (`POST`), `created:true`. `included_prs` are the `#N` references in the compared commits'
-subjects (`title (#N)` squash or `Merge pull request #N` merge commits). The title is `KEY-1, KEY-2: Promote <head> to <base>`, with the Jira keys of the included PRs taken from the same subjects (`KEY-1: …` squash subjects or `Merge pull request #N from <owner>/KEY-1-…` branches); keys that do not fit GitHub's 256 characters become `+N`, and no key leaves the plain `Promote <head> to <base>`. The comparison is paged until
+subjects (`title (#N)` squash or `Merge pull request #N` merge commits). The title is `KEY-1, KEY-2: Promote <head> to <base>`; keys that do not fit GitHub's 256 characters become `+N`, and no key leaves the plain `Promote <head> to <base>`. The keys depend on `key_pattern` (a regular expression of one whole key, e.g. a work adapter's key format):
+
+- absent: Jira-shaped keys (`^[A-Z][A-Z0-9]+-\d+$`) from the same subjects, as before 0.3.0;
+- a pattern that matches `#1` and `#205` (GitHub issues, e.g. `^#\d+$`): the issues each included PR
+  closes, read from its body (`GET pulls/{n}`, one per included PR): `Closes|Fixes|Resolves #N` and the
+  other GitHub closing keywords (`close`, `closed`, `fix`, `fixed`, `resolve`, `resolved`, any case, optional
+  `:`). Same-repository `#N` only; the PR's own number, `Refs #N` and commit-message references are never keys;
+- any other pattern: keys from the subjects like the default, with that pattern: the text before the
+  first `:` of a squash subject, or the shortest `-`-separated prefix of a merge commit's branch
+  (`Merge pull request #N from <owner>/<branch>`), when the pattern matches it whole.
+
+A pattern that does not compile → `invalid_input` before any network call. A key is at most 20 characters of `[A-Za-z0-9#_.-]`; a supplied pattern runs at most once per distinct candidate and within a per-call budget (500 candidates or 250 ms spent matching; waiting on GitHub does not count), past which the title is the plain one. The comparison is paged until
 every commit is read; beyond the safety cap (50 pages of 100) it refuses with `github_unavailable`
-("comparison too large") and writes nothing. Without
-`GITHUB_APP_PROMOTION`, or for another repository, both promotion tools refuse with `invalid_input`.
+("comparison too large") and writes nothing. For a policy
+repository without `promotion`, both promotion tools refuse with `invalid_input`.
 
 `submit_review` writes the marker `<!-- github-app-review head=<sha> pass=<n> -->` as the first line of
 every review body; the pass of earlier reviews is read back from it, so no local state is kept. Inline
@@ -182,15 +225,16 @@ Recovery: end with stale: and let the dispatcher review the new head
 | Cause starts with | First line | Recovery |
 | --- | --- | --- |
 | `credential_absent` | `tool_unavailable: tool unavailable` | `run compozy extension secrets set github-app-review --env GITHUB_APP_PRIVATE_KEY --value-stdin` |
-| `config_invalid` (`GITHUB_APP_PROMOTION` malformed or not `GITHUB_APP_BASE->other`) | `tool_unavailable: tool unavailable` | `fix the named variable with compozy extension secrets set github-app-review --env <NAME> --value-stdin` |
+| `policy_unapproved` (digest unset or not a sha256, version file absent, or its bytes do not hash to the digest) | `tool_unavailable: tool unavailable` | `operator stages and approves the policy: compozy extension exec github-app-review --cmd policy-stage, then set GITHUB_APP_POLICY_DIGEST` |
+| `config_invalid` (policy file unreadable or malformed, naming the path and line) | `tool_unavailable: tool unavailable` | `operator fixes the named policy file; run compozy extension exec github-app-review --cmd policy` |
 | `credential_invalid` | `tool_unavailable: tool unavailable` | `re-bind the app private key; run compozy extension exec github-app-review --cmd doctor` |
-| `repo_not_allowed` | `tool_invalid_input: invalid tool request` | `use an allowlisted repository` |
+| `repo_not_allowed` | `tool_invalid_input: invalid tool request` | `use a repository of the approved policy; the operator adds others with policy-stage` |
 | `repo_not_installed` | `tool_unavailable: tool unavailable` | `install the app on the repository` |
 | `invalid_input` | `tool_invalid_input: invalid tool request` | `fix the named field` |
 | `too_many_findings` / `field_too_long` | `tool_invalid_input: invalid tool request` | `merge findings or shorten the text` |
 | `field_too_long` (assembled review body over 60 000) | `tool_invalid_input: invalid tool request` | `split or shorten findings` |
 | `pr_not_reviewable` | `tool_invalid_input: invalid tool request` | `review only open, non-draft PRs` |
-| `base_not_reviewable` | `tool_invalid_input: invalid tool request` | `the app reviews only pull requests into GITHUB_APP_BASE` |
+| `base_not_reviewable` | `tool_invalid_input: invalid tool request` | `the app reviews only pull requests into the repository's delivery_base` |
 | `head_moved` | `tool_invalid_input: invalid tool request` | `end with stale: and let the dispatcher review the new head` |
 | `already_reviewed_head` | `tool_invalid_input: invalid tool request` | `nothing to do for this head` |
 | `rereview_not_eligible` | `tool_invalid_input: invalid tool request` | `the executor must change code or reply on a bot thread` |
@@ -201,6 +245,34 @@ Recovery: end with stale: and let the dispatcher review the new head
 
 The CLI (`compozy tool invoke`, `compozy extension exec`) prints only the first line in human output and
 exits non-zero; `-o json` carries `operator_cause` and `operator_recovery`.
+
+## Migrating from 0.2.x
+
+BREAKING (0.3.0): `GITHUB_APP_REPOS`, `GITHUB_APP_BASE`, `GITHUB_APP_PROMOTION` and
+`GITHUB_APP_PROMOTION_APPROVERS` are removed; 0.3.0 neither declares nor reads them, and until a policy
+is approved every tool refuses with `policy_unapproved`. Move them to the policy working copy
+`~/.config/compozy-github-app/policy.toml` ([docs/policy.md](docs/policy.md)), one block per repository
+of the old `GITHUB_APP_REPOS`:
+
+```toml
+[repos."<owner/name>"]
+delivery_base = "<GITHUB_APP_BASE>"
+promotion = { head = "<head>", base = "<base>" }   # from GITHUB_APP_PROMOTION <owner/name>:<head>-><base>, on that repository only
+approvers = ["<login>", ...]                       # GITHUB_APP_PROMOTION_APPROVERS, required with promotion
+```
+
+The old values are write-only secrets: take them from where you recorded them. Then stage and activate:
+
+```console
+$ compozy extension exec github-app-review --cmd policy-stage      # prints the secrets set line
+$ printf <sha256> | compozy extension secrets set github-app-review --env GITHUB_APP_POLICY_DIGEST --value-stdin
+$ compozy extension disable github-app-review && compozy extension enable github-app-review
+$ compozy extension exec github-app-review --cmd policy -o json    # active.state "approved", working_active true
+$ compozy extension secrets unset github-app-review --env GITHUB_APP_REPOS   # and the other three removed keys
+```
+
+`upsert_promotion` keeps its 0.2 title without `key_pattern`. The doctor report moves the delivery base
+and promotion lines under each repository and adds a `policy:` line.
 
 ## Reviewer sandbox
 
@@ -255,7 +327,7 @@ $ bun test/fake-github.ts --port 8790 &                  # fake GitHub (control:
 $ scripts/it-env.sh daemon start
 $ mkdir -p /tmp/ghar-it/ws && scripts/it-env.sh workspace add /tmp/ghar-it/ws
 $ bun run build && scripts/it-env.sh extension build .
-$ bun scripts/it-setup.ts                                # installs a test copy with GITHUB_APP_API_URL, binds a throwaway key
-$ bun scripts/it.ts                                      # IT-001, IT-002, IT-003, IT-004, IT-005, IT-006
+$ bun scripts/it-setup.ts                                # installs a test copy (API URL, policy file under /tmp/ghar-it/policy), binds a throwaway key
+$ bun scripts/it.ts                                      # policy approval flow, two-repo policy, IT-001 … IT-006
 $ scripts/it-env.sh daemon stop
 ```

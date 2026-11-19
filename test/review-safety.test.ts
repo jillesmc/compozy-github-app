@@ -67,7 +67,7 @@ describe("R-2 PR re-validated right before the POST", () => {
     assert.equal(h.posts().length, 0);
   });
 
-  test("UT-024 submit_review: base retargeted away from GITHUB_APP_BASE during the reads → base_not_reviewable; no POST", async () => {
+  test("UT-024 submit_review: base retargeted away from delivery_base during the reads → base_not_reviewable; no POST", async () => {
     during("/files", () => (h.gh.state.pr.base = { ref: "main", repo: { default_branch: "main" } }));
     assert.equal((await failure(h.call("submit_review", dxInput({ findings: [] })))).code, "base_not_reviewable");
     during("/reviews", () => (h.gh.state.pr.draft = true));

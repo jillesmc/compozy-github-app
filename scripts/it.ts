@@ -1,5 +1,6 @@
 /**
- * IT-001, IT-002, IT-003, IT-004, IT-005, IT-006 through a real, ISOLATED CompozyOS daemon (scripts/it-env.sh) and the
+ * factory-roles policy approval (UT-053 path through the daemon) and factory-roles IT-002 (two-repo
+ * approved policy), then IT-001, IT-002, IT-003, IT-004, IT-005, IT-006 through a real, ISOLATED CompozyOS daemon (scripts/it-env.sh) and the
  * fake GitHub (bun test/fake-github.ts --port 8790). Prerequisites (README › Development): isolated
  * daemon started, workspace $IT_WS registered, `bun scripts/it-setup.ts` run. IT-006 unsets the key last.
  * Usage: bun scripts/it.ts
@@ -45,6 +46,65 @@ const fake = async (path: string, body?: unknown) =>
 const posts = async () => (await fake("/_fake/requests")).filter((r: any) => r.method === "POST" && r.path.endsWith("/reviews"));
 const report = (id: string, line: string) => process.stdout.write(`${id}: ${line}\n`);
 
+const exec = (cmd: string) => compozy(["extension", "exec", "github-app-review", "--cmd", cmd, "-o", "json"]);
+const restart = () => {
+  for (const verb of ["disable", "enable"]) assert.equal(compozy(["extension", verb, "github-app-review"]).status, 0);
+};
+const structured = (run: { stdout: string }) => JSON.parse(run.stdout).result.structured;
+
+// factory-roles policy approval: active while the digest is unset; tools refuse; policy/policy-stage work.
+await fake("/_fake/reset");
+const unsetStatus = exec("policy");
+assert.equal(unsetStatus.status, 0, unsetStatus.stderr);
+const before = structured(unsetStatus);
+report("FR-policy", `digest unset → ${JSON.stringify(before)}`);
+assert.equal(before.active.state, "unset");
+assert.deepEqual(before.repos.added, ["acme/widgets", "acme/gadgets"]);
+const refused = invoke("pr_context", { repo: REPO, number: 231 });
+assert.notEqual(refused.status, 0);
+assert.match(refused.stdout + refused.stderr, /policy_unapproved: GITHUB_APP_POLICY_DIGEST is not set/);
+assert.equal((await fake("/_fake/requests")).length, 0, "no GitHub request while unapproved");
+const staged = exec("policy-stage");
+assert.equal(staged.status, 0, staged.stderr);
+const stage = structured(staged);
+report("FR-policy", `policy-stage → ${JSON.stringify(stage)}`);
+assert.equal(stage.status, "staged");
+assert.equal(structured(exec("policy-stage")).status, "unchanged");
+const set = compozy(["extension", "secrets", "set", "github-app-review", "--env", "GITHUB_APP_POLICY_DIGEST", "--value-stdin"], stage.digest);
+assert.equal(set.status, 0, set.stderr);
+let after = structured(exec("policy"));
+if (after.active.state !== "approved") {
+  report("FR-policy", `still ${after.active.state} after secrets set; restarting the extension`);
+  restart();
+  after = structured(exec("policy"));
+}
+report("FR-policy", `after activation → ${JSON.stringify(after)}`);
+assert.deepEqual([after.active.state, after.working_active], ["approved", true]);
+const human = compozy(["extension", "exec", "github-app-review", "--cmd", "policy"]);
+report("FR-policy", `human: ${human.stdout.trim().replaceAll("\n", " | ")}`);
+
+// factory-roles IT-002: an approved two-repo version → review, gate and promotion resolve each repo's branches.
+for (const [repo, delivery, promotion] of [["acme/widgets", "staging", "main"], ["acme/gadgets", "develop", "release"]] as const) {
+  await fake("/_fake/reset");
+  await fake("/_fake/state", { repo, installedRepos: ["widgets", "gadgets"], pr: { ...(await fake("/_fake/state")).pr, base: { ref: delivery, repo: { default_branch: "main" } } } });
+  const reviewed = invoke("submit_review", dxInput({ repo, findings: [] }));
+  assert.equal(reviewed.status, 0, reviewed.stdout + reviewed.stderr);
+  assert.equal(structured(reviewed).event, "APPROVE");
+  const gated = structured(invoke("merge_gate", { repo, number: 231, kind: "delivery" }));
+  assert.deepEqual(gated, { ready: true, head_sha: HEAD, reasons: [] });
+  const opened = invoke("upsert_promotion", { repo });
+  assert.equal(opened.status, 0, opened.stdout + opened.stderr);
+  const pulls = (await fake("/_fake/requests")).filter((r: any) => r.method === "POST" && r.path === `/repos/${repo}/pulls`);
+  assert.deepEqual(pulls.map((r: any) => [r.body.head, r.body.base]), [[delivery, promotion]]);
+  report("FR IT-002", `${repo}: review APPROVE into ${delivery}; gate ready; promotion ${delivery} → ${promotion}`);
+}
+// The other repo's base is refused: acme/gadgets never reviews into staging.
+await fake("/_fake/reset");
+await fake("/_fake/state", { repo: "acme/gadgets", installedRepos: ["widgets", "gadgets"] });
+const wrongBase = invoke("submit_review", dxInput({ repo: "acme/gadgets", findings: [] }));
+assert.match(wrongBase.stdout + wrongBase.stderr, /base_not_reviewable: pull request #231 targets staging, not delivery_base \(develop\)/);
+report("FR IT-002", "acme/gadgets PR into staging → base_not_reviewable; ok");
+
 // IT-001: the _dx.md input → one review POST, one inline comment, README finding in the body.
 await fake("/_fake/reset");
 const it1 = invoke("submit_review", dxInput());
@@ -77,9 +137,9 @@ report("IT-001", "policy ok (no agent: submit_review tool_denied, no POST; merge
 // IT-002: stale head_sha → non-zero exit, Cause head_moved, no POST.
 await fake("/_fake/reset");
 const it2 = invoke("submit_review", dxInput({ head_sha: OLD_HEAD }));
-const human = compozy(["tool", "invoke", "ext__github_app_review__submit_review", "--workspace", WS, "--agent", AGENT, "--input", JSON.stringify(dxInput({ head_sha: OLD_HEAD }))]);
+const it2Human = compozy(["tool", "invoke", "ext__github_app_review__submit_review", "--workspace", WS, "--agent", AGENT, "--input", JSON.stringify(dxInput({ head_sha: OLD_HEAD }))]);
 report("IT-002", `exit ${it2.status}; json: ${it2.stdout.replace(/\s+/g, " ").trim()}`);
-report("IT-002", `human exit ${human.status}: ${(human.stdout + human.stderr).trim()}`);
+report("IT-002", `human exit ${it2Human.status}: ${(it2Human.stdout + it2Human.stderr).trim()}`);
 assert.notEqual(it2.status, 0);
 assert.match(it2.stdout + it2.stderr, /head_moved: head_sha 1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d is not the current head; current head is 9f2c1e0a7b3d4c5e6f708192a3b4c5d6e7f80912/);
 assert.equal((await posts()).length, 0);
@@ -145,7 +205,7 @@ assert.deepEqual(approved, { ready: true, head_sha: PROMO_HEAD, reasons: [] });
 const unset = compozy(["extension", "secrets", "unset", "github-app-review", "--env", "GITHUB_APP_PRIVATE_KEY"]);
 assert.equal(unset.status, 0, unset.stderr);
 // Restart the subprocess so it starts without the key.
-for (const verb of ["disable", "enable"]) assert.equal(compozy(["extension", verb, "github-app-review"]).status, 0);
+restart();
 const doctor = compozy(["extension", "exec", "github-app-review", "--cmd", "doctor", "-o", "json"]);
 const doctorHuman = compozy(["extension", "exec", "github-app-review", "--cmd", "doctor"]);
 report("IT-006", `exit ${doctor.status}; json: ${doctor.stdout.replace(/\s+/g, " ").trim()}`);

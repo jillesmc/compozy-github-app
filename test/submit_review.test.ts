@@ -91,16 +91,16 @@ describe("submit_review", () => {
     assert.equal(h.posts().length, 0);
   });
 
-  test("UT-024 submit_review: base other than GITHUB_APP_BASE → base_not_reviewable; no POST", async () => {
+  test("UT-024 submit_review: base other than the repo's delivery_base → base_not_reviewable; no POST", async () => {
     h.gh.state.pr.base = { ref: "main", repo: { default_branch: "main" } };
     const error = await failure(h.call("submit_review", dxInput()));
-    assert.deepEqual([error.code, error.toolCode, error.recovery], ["base_not_reviewable", "tool_invalid_input", "the app reviews only pull requests into GITHUB_APP_BASE"]);
-    assert.match(error.message, /targets main, not GITHUB_APP_BASE \(staging\)/);
+    assert.deepEqual([error.code, error.toolCode, error.recovery], ["base_not_reviewable", "tool_invalid_input", "the app reviews only pull requests into the repository's delivery_base"]);
+    assert.match(error.message, /targets main, not delivery_base \(staging\)/);
     assert.equal(h.posts().length, 0);
   });
 
-  test("UT-024 submit_review: GITHUB_APP_BASE=main reviews PRs into the default branch", async () => {
-    const m = await harness({ GITHUB_APP_BASE: "main", GITHUB_APP_PROMOTION: undefined });
+  test("UT-024 submit_review: delivery_base = main reviews PRs into the default branch", async () => {
+    const m = await harness({}, `[repos."${REPO}"]\ndelivery_base = "main"\n`);
     m.gh.state.pr.base = { ref: "main", repo: { default_branch: "main" } };
     assert.equal((await m.call("submit_review", dxInput())).pass, 1);
     m.gh.state.pr.base = { ref: "staging", repo: { default_branch: "main" } };

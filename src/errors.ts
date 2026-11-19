@@ -12,6 +12,7 @@ export type ReviewErrorCode =
   | "pr_not_reviewable"
   | "base_not_reviewable"
   | "config_invalid"
+  | "policy_unapproved"
   | "head_moved"
   | "already_reviewed_head"
   | "rereview_not_eligible"
@@ -40,19 +41,22 @@ export const reviewError = (code: ReviewErrorCode, message: string, httpStatus?:
 
 const SECRETS_SET = "run compozy extension secrets set github-app-review --env GITHUB_APP_PRIVATE_KEY --value-stdin";
 const DOCTOR = "compozy extension exec github-app-review --cmd doctor";
+const POLICY = "compozy extension exec github-app-review --cmd policy";
+const POLICY_STAGE = "compozy extension exec github-app-review --cmd policy-stage";
 
 /** CompozyOS first-line code and recovery per cause code (`_dx.md` › Errors). */
 const MAPPING: Record<ReviewErrorCode | "extension_failed", [string, string]> = {
   credential_absent: ["tool_unavailable", SECRETS_SET],
   credential_invalid: ["tool_unavailable", `re-bind the app private key; run ${DOCTOR}`],
-  repo_not_allowed: ["tool_invalid_input", "use an allowlisted repository"],
+  repo_not_allowed: ["tool_invalid_input", "use a repository of the approved policy; the operator adds others with policy-stage"],
   repo_not_installed: ["tool_unavailable", "install the app on the repository"],
   invalid_input: ["tool_invalid_input", "fix the named field"],
   too_many_findings: ["tool_invalid_input", "merge findings or shorten the text"],
   field_too_long: ["tool_invalid_input", "merge findings or shorten the text"],
   pr_not_reviewable: ["tool_invalid_input", "review only open, non-draft PRs"],
-  base_not_reviewable: ["tool_invalid_input", "the app reviews only pull requests into GITHUB_APP_BASE"],
-  config_invalid: ["tool_unavailable", "fix the named variable with compozy extension secrets set github-app-review --env <NAME> --value-stdin"],
+  base_not_reviewable: ["tool_invalid_input", "the app reviews only pull requests into the repository's delivery_base"],
+  config_invalid: ["tool_unavailable", `operator fixes the named policy file; run ${POLICY}`],
+  policy_unapproved: ["tool_unavailable", `operator stages and approves the policy: ${POLICY_STAGE}, then set GITHUB_APP_POLICY_DIGEST`],
   head_moved: ["tool_invalid_input", "end with stale: and let the dispatcher review the new head"],
   already_reviewed_head: ["tool_invalid_input", "nothing to do for this head"],
   rereview_not_eligible: ["tool_invalid_input", "the executor must change code or reply on a bot thread"],

@@ -136,7 +136,7 @@ const ready = (): PrSnapshot => ({
 describe("staging gate", () => {
   test("UT-040 deliveryGate: all BR-7 conditions → ready", () => {
     assert.deepEqual(deliveryGate(ready(), "staging"), { ready: true, head_sha: HEAD, reasons: [] });
-    // The delivery branch is configuration (GITHUB_APP_BASE), e.g. main.
+    // The delivery branch is configuration (the repository's delivery_base), e.g. main.
     assert.deepEqual(deliveryGate({ ...ready(), base_ref: "main" }, "main").reasons, []);
     assert.deepEqual(deliveryGate(ready(), "main").reasons, ["base_mismatch"]);
     // Pass 1 CHANGES_REQUESTED then pass 2 APPROVE on the same head is ready (latest per author).

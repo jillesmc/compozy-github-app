@@ -2,9 +2,9 @@ import assert from "node:assert/strict";
 import { afterEach, beforeEach, describe, test } from "node:test";
 
 import { promotionGate, type PrSnapshot, type PromotionConfig } from "../src/rules.ts";
-import { includedJiraKeys, includedPrs, MAX_COMPARE_PAGES, promotionTitle } from "../src/tools/upsert_promotion.ts";
+import { includedKeys, includedPrs, MAX_COMPARE_PAGES, promotionTitle } from "../src/tools/upsert_promotion.ts";
 import { BOT, HEAD, OLD_HEAD, PROMO_HEAD, pull, REPO, review } from "./fixtures.ts";
-import { failure, harness } from "./helpers.ts";
+import { DEFAULT_POLICY, failure, harness } from "./helpers.ts";
 
 const CFG: PromotionConfig = { head: "staging", base: "main", approvers: ["octocat"] };
 
@@ -60,7 +60,7 @@ describe("promotion gate (BR-8)", () => {
     assert.deepEqual(promotionGate(s, CFG).reasons, ["promotion_not_approved", "changes_requested"]);
   });
 
-  test("UT-050 promotionGate: base/head must match GITHUB_APP_PROMOTION (no default-branch assumption)", () => {
+  test("UT-050 promotionGate: base/head must match the repo's policy promotion (no default-branch assumption)", () => {
     // Any configured base works, whether or not it is the repository's default branch.
     assert.deepEqual(promotionGate({ ...promotion(), base_ref: "release" }, { ...CFG, base: "release" }).reasons, []);
     for (const change of [{ base_ref: "staging" }, { head_ref: "feature" }]) {
@@ -130,7 +130,7 @@ describe("upsert_promotion and merge_gate kind=promotion over the fake GitHub", 
       "Merge pull request #9 from acme/dependabot/docker/x",
       "chore: bump UTF-8 handling (#10)",
     ];
-    const keys = includedJiraKeys(subjects.map(message => ({ commit: { message } })));
+    const keys = includedKeys(subjects.map(message => ({ commit: { message } })));
     assert.deepEqual(keys, ["WID-18098", "WID-18381"]);
     assert.equal(promotionTitle("staging", "production", keys), "WID-18098, WID-18381: Promote staging to production");
     assert.equal(promotionTitle("staging", "production", []), "Promote staging to production");
@@ -181,15 +181,14 @@ describe("upsert_promotion and merge_gate kind=promotion over the fake GitHub", 
     assert.deepEqual((await h.call("merge_gate", gate)).reasons, ["not_app_authored"]);
   });
 
-  test("UT-054 promotion tools: GITHUB_APP_PROMOTION unset or another repo → invalid_input before any HTTP call", async () => {
+  test("UT-054 promotion tools: repo without a promotion in the policy → invalid_input before any HTTP call", async () => {
     await h.close();
-    h = await harness({ GITHUB_APP_PROMOTION: undefined });
-    for (const call of [h.call("upsert_promotion", { repo: REPO }), h.call("merge_gate", { repo: REPO, number: 240, kind: "promotion" })]) {
-      assert.equal((await failure(call)).code, "invalid_input");
+    h = await harness({}, `${DEFAULT_POLICY}\n[repos."acme/other"]\ndelivery_base = "main"\n`);
+    for (const call of [h.call("upsert_promotion", { repo: "acme/other" }), h.call("merge_gate", { repo: "acme/other", number: 240, kind: "promotion" })]) {
+      const error = await failure(call);
+      assert.equal(error.code, "invalid_input");
+      assert.match(error.message, /acme\/other has no promotion in the approved policy/);
     }
-    await h.close();
-    h = await harness({ GITHUB_APP_REPOS: `${REPO},acme/other` });
-    assert.match((await failure(h.call("upsert_promotion", { repo: "acme/other" }))).message, /not the promotion repository/);
     assert.equal(h.fetches(), 0);
   });
 });
